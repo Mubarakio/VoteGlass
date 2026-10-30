@@ -1,0 +1,127 @@
+﻿@page "/admin/elections/{Id:int}/results"
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using VoteGlass.Models
+@using VoteGlass.Services
+@attribute [Authorize(Policy = "OrgAdmin")]
+@implements IDisposable
+@inject ResultsService Results
+@inject ResultsNotifier Notifier
+@inject AuthenticationStateProvider AuthProvider
+
+<PageTitle>Results</PageTitle>
+
+@if (loading)
+{
+    <div class="gl-skeleton" style="height:200px;margin-top:16px"></div>
+}
+else if (data is null)
+{
+    <div class="gl-glass gl-card" style="margin-top:16px">
+        <div class="gl-alert gl-alert-error">Election not found.</div>
+        <a class="gl-btn" href="admin">Back to dashboard</a>
+    </div>
+}
+else
+{
+    <div class="gl-glass gl-card" style="margin-top:16px">
+        <div class="gl-row">
+            <div>
+                <h2 style="margin:0"><span class="gl-swatch" style="background:@data.Election.AccentColor"></span> @data.Election.Title</h2>
+                <div class="gl-muted">@VisibilityText(data.Election)</div>
+            </div>
+            <div>
+                @if (data.Status == ElectionStatus.Closed && data.Election.ResultVisibility == ResultVisibility.AfterPublish)
+                {
+                    @if (data.Election.ResultsPublished)
+                    {
+                        <button class="gl-btn" @onclick="() => SetPublishedAsync(false)">Hide results from voters</button>
+                    }
+                    else
+                    {
+                        <button class="gl-btn gl-btn-primary" @onclick="() => SetPublishedAsync(true)">Publish results to voters</button>
+                    }
+                }
+                <a class="gl-btn" href="admin">Back</a>
+            </div>
+        </div>
+
+        @if (error is not null)
+        {
+            <div class="gl-alert gl-alert-error">@error</div>
+        }
+    </div>
+
+    <ResultsView Data="data" AdminMode="true" OnTieDecision="SaveTieAsync" />
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private ElectionResults? data;
+    private bool loading = true;
+    private string? error;
+    private string userId = "";
+    private System.Threading.Timer? timer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "";
+
+        await LoadAsync();
+        loading = false;
+        Notifier.ResultsChanged += OnResultsChanged;
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        // Catches the moment an election opens or closes
+        timer = new System.Threading.Timer(_ => RefreshFromOutside(), null,
+            TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+    }
+
+    private void OnResultsChanged(int electionId)
+    {
+        if (electionId == Id) RefreshFromOutside();
+    }
+
+    private void RefreshFromOutside() => _ = InvokeAsync(async () =>
+    {
+        try
+        {
+            await LoadAsync();
+            StateHasChanged();
+        }
+        catch { /* ignore, the next update will try again */ }
+    });
+
+    private async Task LoadAsync() => data = await Results.GetAsync(Id, forAdmin: true);
+
+    private async Task SetPublishedAsync(bool published)
+    {
+        error = await Results.SetPublishedAsync(userId, Id, published);
+        await LoadAsync();
+    }
+
+    private async Task SaveTieAsync((int PositionId, List<int> Winners) decision)
+    {
+        error = await Results.SaveTieDecisionAsync(userId, decision.PositionId, decision.Winners);
+        await LoadAsync();
+    }
+
+    private static string VisibilityText(Election e) => e.ResultVisibility switch
+    {
+        ResultVisibility.Live => "Voters can see live results.",
+        ResultVisibility.AfterClose => "Voters can see the results once the election closes.",
+        _ => e.ResultsPublished ? "The results are published to voters." : "Voters can see the results after you publish them."
+    };
+
+    public void Dispose()
+    {
+        Notifier.ResultsChanged -= OnResultsChanged;
+        timer?.Dispose();
+    }
+}

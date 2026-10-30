@@ -1,0 +1,151 @@
+﻿@page "/join/{Code}"
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using VoteGlass.Services
+@attribute [Authorize]
+@inject VerificationService Verification
+@inject AuthenticationStateProvider AuthProvider
+
+<PageTitle>Join an organisation</PageTitle>
+
+@if (loading)
+{
+    <div class="gl-skeleton" style="height:200px;margin-top:16px"></div>
+}
+else if (!info.Available)
+{
+    <div class="gl-glass gl-card" style="margin-top:16px">
+        <div class="gl-alert gl-alert-error">This join link isn't valid, or the organisation isn't available. Ask the organiser for a new link.</div>
+        <a class="gl-btn" href="voter">Back</a>
+    </div>
+}
+else if (!info.HasProfile)
+{
+    <div class="gl-glass gl-card" style="margin-top:16px">
+        <h2 style="margin-top:0">Join @info.OrganizationName</h2>
+        <p class="gl-muted">First complete your voter profile. It only takes a minute, and you'll come straight back here.</p>
+        <a class="gl-btn gl-btn-primary" href="@ProfileUrl">Complete my profile</a>
+    </div>
+}
+else if (info.IsMember || joined)
+{
+    <div class="gl-glass gl-card gl-done" style="margin-top:16px">
+        <div class="gl-tick">✓</div>
+        <h2>@(joined ? "You've joined" : "You're a member of") @info.OrganizationName</h2>
+        <p class="gl-muted">You can now see and vote in its elections.</p>
+        <a class="gl-btn gl-btn-primary" href="@ContinueUrl">Continue</a>
+    </div>
+}
+else
+{
+    <div class="gl-glass gl-card" style="margin-top:16px">
+        <h2 style="margin-top:0">Join @info.OrganizationName</h2>
+        <p class="gl-muted">Enter the registration number on the organisation's voter list. We'll email a 6-digit code to the address the organisation has on file for you.</p>
+
+        @if (infoMessage is not null)
+        {
+            <div class="gl-alert">@infoMessage</div>
+        }
+        @if (error is not null)
+        {
+            <div class="gl-alert gl-alert-error">@error</div>
+        }
+
+        <div class="gl-filters">
+            <input class="gl-input" placeholder="Your registration number" maxlength="50"
+                   @bind="regNo" @bind:event="oninput" />
+            <button class="gl-btn gl-btn-primary" disabled="@sending" @onclick="SendCodeAsync">
+                @(sending ? "Sending..." : codeSent ? "Send a new code" : "Send me a code")
+            </button>
+        </div>
+
+        @if (codeSent)
+        {
+            <div class="gl-form" style="margin-top:14px">
+                <div class="gl-field">
+                    <label>6-digit code</label>
+                    <input class="gl-input" maxlength="6" inputmode="numeric" autocomplete="one-time-code"
+                           @bind="codeInput" @bind:event="oninput" />
+                </div>
+                <div class="gl-field" style="align-self:end">
+                    <button class="gl-btn gl-btn-primary" disabled="@verifying" @onclick="VerifyAsync">
+                        @(verifying ? "Checking..." : "Verify and join")
+                    </button>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string Code { get; set; } = "";
+    [SupplyParameterFromQuery(Name = "returnUrl")] public string? ReturnUrl { get; set; }
+
+    private JoinInfo info = new(0, null, false, false, false);
+    private bool loading = true;
+    private bool joined;
+    private bool codeSent;
+    private bool sending;
+    private bool verifying;
+    private string regNo = "";
+    private string codeInput = "";
+    private string? infoMessage;
+    private string? error;
+    private string userId = "";
+
+    private bool HasSafeReturn =>
+        !string.IsNullOrEmpty(ReturnUrl) && ReturnUrl.StartsWith('/') && !ReturnUrl.StartsWith("//");
+
+    private string ContinueUrl => HasSafeReturn ? ReturnUrl!.TrimStart('/') : "voter";
+
+    // After the profile is saved, the person comes back here, and then on to where they were heading
+    private string ProfileUrl
+    {
+        get
+        {
+            var back = $"/join/{Code}" + (HasSafeReturn ? "?returnUrl=" + Uri.EscapeDataString(ReturnUrl!) : "");
+            return "voter/profile?returnUrl=" + Uri.EscapeDataString(back);
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "";
+        info = await Verification.GetJoinInfoAsync(userId, Code);
+        loading = false;
+    }
+
+    private async Task SendCodeAsync()
+    {
+        infoMessage = null;
+        error = null;
+        sending = true;
+
+        var result = await Verification.RequestCodeAsync(userId, info.OrganizationId, regNo);
+        if (result.Success)
+        {
+            codeSent = true;
+            codeInput = "";
+            infoMessage = $"We sent a 6-digit code to {result.MaskedEmail}. It's valid for {VerificationService.CodeMinutes} minutes.";
+        }
+        else
+        {
+            error = result.Message;
+        }
+        sending = false;
+    }
+
+    private async Task VerifyAsync()
+    {
+        infoMessage = null;
+        error = null;
+        verifying = true;
+
+        var result = await Verification.VerifyCodeAsync(userId, info.OrganizationId, codeInput);
+        if (result.Success) joined = true;
+        else error = result.Message;
+
+        verifying = false;
+    }
+}

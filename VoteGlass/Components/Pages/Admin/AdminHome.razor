@@ -1,0 +1,168 @@
+﻿@page "/admin"
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using VoteGlass.Models
+@using VoteGlass.Services
+@attribute [Authorize(Policy = "OrgAdmin")]
+@implements IDisposable
+@inject ElectionService Elections
+@inject AuthenticationStateProvider AuthProvider
+@inject VotingService Voting
+@inject NavigationManager Navigation
+
+<PageTitle>Admin Dashboard</PageTitle>
+
+<div class="gl-grid">
+    <div class="gl-glass gl-card">
+        <div class="gl-muted">Live elections</div>
+        <div class="gl-stat">@(elections?.Count(e => ElectionService.StatusOf(e) == ElectionStatus.Live) ?? 0)</div>
+    </div>
+    <div class="gl-glass gl-card">
+       <div class="gl-muted">Registered members</div>
+        <div class="gl-stat">@counts.Approved</div>
+    </div>
+    <div class="gl-glass gl-card">
+      <div class="gl-muted">Waiting to register</div>
+        <div class="gl-stat">@counts.Pending</div>
+    </div>
+</div>
+
+<div class="gl-glass gl-card" style="margin-top:16px">
+    <div class="gl-row">
+        <h3 style="margin:0">Elections</h3>
+        <a class="gl-btn gl-btn-primary" href="admin/elections/new">+ New election</a>
+    </div>
+
+    @if (error is not null)
+    {
+        <div class="gl-alert gl-alert-error">@error</div>
+    }
+
+    @if (elections is null)
+    {
+        <div class="gl-skeleton" style="height:120px;margin-top:14px"></div>
+    }
+    else if (elections.Count == 0)
+    {
+        <p class="gl-muted">No elections yet. Click "New election" to create your first one.</p>
+    }
+    else
+    {
+        <div class="gl-table-wrap">
+            <table class="gl-table">
+              <tr><th>Election</th><th>Status</th><th>Starts</th><th>Ends</th><th>Voted</th><th></th></tr>
+                @foreach (var e in elections)
+                {
+                    var status = ElectionService.StatusOf(e);
+                    <tr>
+                        <td>
+                            <span class="gl-swatch" style="background:@e.AccentColor"></span> @e.Title
+                            @if (status == ElectionStatus.Draft && e.StartTime <= DateTime.UtcNow)
+                            {
+                                <div class="gl-warn">Start time has passed. Publish it or change the dates.</div>
+                            }
+                            <div class="gl-muted gl-small">@WhoCanVote(e)</div>
+                        </td>
+                        <td><span class="gl-pill @PillClass(status)">@status</span></td>
+                        <td>@AppTime.Format(e.StartTime)</td>
+                        <td>@AppTime.Format(e.EndTime)</td>
+                        <td>@VotedCount(e.Id)</td>
+                        <td class="gl-actions-cell">
+                            <a class="gl-btn gl-btn-sm" href="admin/elections/@e.Id">@(ElectionService.IsEditable(e) ? "Edit" : "View")</a>                         
+                            <a class="gl-btn gl-btn-sm" href="admin/elections/@e.Id/ballot">Ballot</a>
+                            @if (status == ElectionStatus.Live || status == ElectionStatus.Closed)
+                             {
+                               <a class="gl-btn gl-btn-sm" href="admin/elections/@e.Id/results">Results</a>
+                             }
+                            @if (status == ElectionStatus.Draft)
+                            {
+                                <button class="gl-btn gl-btn-sm gl-btn-primary" @onclick="() => RunAsync(() => Elections.PublishAsync(userId, e.Id))">Publish</button>
+
+                                @if (confirmDeleteId == e.Id)
+                                {
+                                    <button class="gl-btn gl-btn-sm" @onclick="() => RunAsync(() => Elections.DeleteAsync(userId, e.Id))">Confirm delete</button>
+                                    <button class="gl-btn gl-btn-sm" @onclick="() => confirmDeleteId = null">Cancel</button>
+                                }
+                                else
+                                {
+                                    <button class="gl-btn gl-btn-sm" @onclick="() => confirmDeleteId = e.Id">Delete</button>
+                                }
+                            }
+                            else if (status == ElectionStatus.Scheduled)
+                            {
+                                <button class="gl-btn gl-btn-sm" @onclick="() => RunAsync(() => Elections.UnpublishAsync(userId, e.Id))">Unpublish</button>
+                            }
+                            @if (status != ElectionStatus.Draft)
+                            {
+                               <button type="button" class="gl-btn gl-btn-sm" data-code="@ElectionLink(e.Id)" onclick="voteGlassCopy(this)">Copy link</button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    private List<Election>? elections;
+    private VoterCounts counts = new(0, 0);
+    private string? error;
+    private string userId = "";
+    private int? confirmDeleteId;
+    private System.Threading.Timer? timer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "";
+        await LoadAsync();
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        // Refresh every 30 seconds so statuses (Scheduled -> Live -> Closed) update by themselves
+        timer = new System.Threading.Timer(_ => _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                await LoadAsync();
+                StateHasChanged();
+            }
+            catch { /* ignore, the next tick will try again */ }
+        }), null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+    }
+
+    private async Task LoadAsync()
+    {
+        elections = await Elections.GetAllAsync();
+        counts = await Elections.GetVoterCountsAsync();
+        turnout = await Voting.GetTurnoutAsync();
+    }
+
+    private async Task RunAsync(Func<Task<string?>> action)
+    {
+        error = await action();
+        confirmDeleteId = null;
+        await LoadAsync();
+    }
+
+    private static string PillClass(ElectionStatus s) => s switch
+    {
+        ElectionStatus.Live => "gl-pill-live",
+        ElectionStatus.Scheduled => "gl-pill-scheduled",
+        ElectionStatus.Closed => "gl-pill-closed",
+        _ => "gl-pill-draft"
+    };
+
+    public void Dispose() => timer?.Dispose();
+    private static string WhoCanVote(Election e) =>
+    e.OpenToEveryone ? "Open to everyone" : "Groups: " + string.Join(", ", e.Groups.Select(g => g.Name));
+
+    private Dictionary<int, int> turnout = new();
+
+    private int VotedCount(int electionId) => turnout.TryGetValue(electionId, out var n) ? n : 0;
+    private string ElectionLink(int id) => $"{Navigation.BaseUri}e/{id}";
+}

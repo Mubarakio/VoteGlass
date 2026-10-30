@@ -1,0 +1,134 @@
+﻿@page "/voter/profile"
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using VoteGlass.Models
+@using VoteGlass.Services
+@attribute [Authorize]
+@inject VoterProfileService Profiles
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Navigation
+
+<PageTitle>My Profile</PageTitle>
+
+<div class="gl-glass gl-card" style="margin-top:16px">
+    <h2>My voter profile</h2>
+    <p class="gl-muted">Your personal details. To vote with an organisation, you also join it using the registration number from its voter list.</p>
+
+    @if (loading)
+    {
+        <div class="gl-skeleton" style="height:220px"></div>
+    }
+    else
+    {
+        @if (message is not null)
+        {
+            <div class="gl-alert">@message</div>
+        }
+        @if (error is not null)
+        {
+            <div class="gl-alert gl-alert-error">@error</div>
+        }
+
+        <EditForm Model="input" OnValidSubmit="SaveAsync" class="gl-form">
+            <DataAnnotationsValidator />
+
+            <div class="gl-field">
+                <label>Full name</label>
+                <InputText class="gl-input" @bind-Value="input.FullName" />
+                <ValidationMessage For="() => input.FullName" />
+            </div>
+
+            <div class="gl-field">
+                <label>Phone number</label>
+                <InputText class="gl-input" @bind-Value="input.PhoneNumber" />
+                <ValidationMessage For="() => input.PhoneNumber" />
+            </div>
+
+            <div class="gl-field">
+                <label>Gender</label>
+                <InputSelect class="gl-input" @bind-Value="input.Gender">
+                    <option value="">Select...</option>
+                    <option>Male</option>
+                    <option>Female</option>
+                    <option>Other</option>
+                    <option>Prefer not to say</option>
+                </InputSelect>
+                <ValidationMessage For="() => input.Gender" />
+            </div>
+
+            <div class="gl-field">
+                <label>Date of birth</label>
+                <InputDate class="gl-input" @bind-Value="input.DateOfBirth" disabled="@dobLocked" />
+                <ValidationMessage For="() => input.DateOfBirth" />
+            </div>
+
+            <div class="gl-field full">
+                <label>Address</label>
+                <InputTextArea class="gl-input" rows="3" @bind-Value="input.Address" />
+                <ValidationMessage For="() => input.Address" />
+            </div>
+
+            <div class="gl-field full">
+                <button type="submit" class="gl-btn gl-btn-primary" disabled="@saving">
+                    @(saving ? "Saving..." : "Save profile")
+                </button>
+                @if (dobLocked)
+                {
+                    <span class="gl-muted" style="margin-left:10px">Your date of birth is locked because you've joined an organisation.</span>
+                }
+            </div>
+        </EditForm>
+    }
+</div>
+
+@code {
+    [SupplyParameterFromQuery(Name = "returnUrl")] public string? ReturnUrl { get; set; }
+
+    private VoterProfileInput input = new();
+    private bool loading = true;
+    private bool saving;
+    private bool dobLocked;
+    private string? message;
+    private string? error;
+    private string userId = "";
+
+    private string? SafeReturn =>
+        !string.IsNullOrEmpty(ReturnUrl) && ReturnUrl.StartsWith('/') && !ReturnUrl.StartsWith("//")
+            ? ReturnUrl.TrimStart('/')
+            : null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "";
+
+        var profile = await Profiles.GetByUserIdAsync(userId);
+        if (profile is not null) input = VoterProfileInput.From(profile);
+        dobLocked = await Profiles.HasJoinedAnyAsync(userId);
+        loading = false;
+    }
+
+    private async Task SaveAsync()
+    {
+        saving = true;
+        message = null;
+        error = null;
+
+        var (ok, err) = await Profiles.SaveAsync(userId, input);
+        if (!ok)
+        {
+            error = err;
+        }
+        else if (SafeReturn is not null)
+        {
+            Navigation.NavigateTo(SafeReturn);       // carry on to wherever they were heading
+            return;
+        }
+        else
+        {
+            dobLocked = await Profiles.HasJoinedAnyAsync(userId);
+            message = "Profile saved.";
+        }
+        saving = false;
+    }
+}

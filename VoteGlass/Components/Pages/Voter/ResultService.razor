@@ -1,0 +1,90 @@
+﻿@page "/voter/elections/{Id:int}/results"
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using VoteGlass.Models
+@using VoteGlass.Services
+@attribute [Authorize(Roles = "Voter")]
+@implements IDisposable
+@inject ResultsService Results
+@inject ResultsNotifier Notifier
+@inject AuthenticationStateProvider AuthProvider
+
+<PageTitle>Results</PageTitle>
+
+@if (loading)
+{
+    <div class="gl-skeleton" style="height:200px;margin-top:16px"></div>
+}
+else if (data is null)
+{
+    <div class="gl-glass gl-card" style="margin-top:16px">
+        <div class="gl-alert gl-alert-error">Results aren't available for this election.</div>
+        <a class="gl-btn" href="voter">Back to my elections</a>
+    </div>
+}
+else
+{
+    <div class="gl-glass gl-card" style="margin-top:16px">
+        <div class="gl-row">
+            <div>
+                <h2 style="margin:0"><span class="gl-swatch" style="background:@data.Election.AccentColor"></span> @data.Election.Title</h2>
+                @if (!string.IsNullOrWhiteSpace(data.Election.Description))
+                {
+                    <div class="gl-muted">@data.Election.Description</div>
+                }
+            </div>
+            <a class="gl-btn" href="voter">Back</a>
+        </div>
+    </div>
+
+    <ResultsView Data="data" />
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private ElectionResults? data;
+    private bool loading = true;
+    private string userId = "";
+    private System.Threading.Timer? timer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "";
+
+        await LoadAsync();
+        loading = false;
+        Notifier.ResultsChanged += OnResultsChanged;
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (!firstRender) return;
+        timer = new System.Threading.Timer(_ => RefreshFromOutside(), null,
+            TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+    }
+
+    private void OnResultsChanged(int electionId)
+    {
+        if (electionId == Id) RefreshFromOutside();
+    }
+
+    private void RefreshFromOutside() => _ = InvokeAsync(async () =>
+    {
+        try
+        {
+            await LoadAsync();
+            StateHasChanged();
+        }
+        catch { /* ignore, the next update will try again */ }
+    });
+
+    private async Task LoadAsync() => data = await Results.GetForVoterAsync(userId, Id);
+
+    public void Dispose()
+    {
+        Notifier.ResultsChanged -= OnResultsChanged;
+        timer?.Dispose();
+    }
+}

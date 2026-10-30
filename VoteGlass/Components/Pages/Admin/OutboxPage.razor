@@ -1,0 +1,138 @@
+﻿@page "/admin/outbox"
+@using System.Net
+@using System.Text.RegularExpressions
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using VoteGlass.Data
+@using VoteGlass.Models
+@using VoteGlass.Services
+@attribute [Authorize(Policy = "OrgAdmin")]
+@implements IDisposable
+@inject IDbContextFactory<ApplicationDbContext> Factory
+
+<PageTitle>Test inbox</PageTitle>
+
+<div class="gl-glass gl-card" style="margin-top:16px">
+    <div class="gl-row">
+        <div>
+            <h2 style="margin:0">Test inbox</h2>
+            <p class="gl-muted" style="margin:4px 0 0">Test mode: emails aren't really sent. They're saved here so you can read them, including verification codes.</p>
+        </div>
+        <div class="gl-row">
+            <label class="gl-check-inline"><input type="checkbox" @bind="autoRefresh" /> Auto-refresh</label>
+            <button class="gl-btn gl-btn-sm" @onclick="LoadAsync">Refresh</button>
+            <button class="gl-btn gl-btn-sm" @onclick="ClearAsync">Clear all</button>
+        </div>
+    </div>
+
+    <div class="gl-chips">
+        <button class="gl-chip @(filter == "all" ? "on" : "")" @onclick='() => filter = "all"'>All (@(messages?.Count ?? 0))</button>
+        <button class="gl-chip @(filter == "codes" ? "on" : "")" @onclick='() => filter = "codes"'>Codes (@(messages?.Count(IsCode) ?? 0))</button>
+        <button class="gl-chip @(filter == "invites" ? "on" : "")" @onclick='() => filter = "invites"'>Invitations (@(messages?.Count(m => !IsCode(m)) ?? 0))</button>
+    </div>
+</div>
+
+@if (messages is null)
+{
+    <div class="gl-skeleton" style="height:120px;margin-top:16px"></div>
+}
+else if (!Visible.Any())
+{
+    <div class="gl-glass gl-card" style="margin-top:16px">
+        <p class="gl-muted" style="margin:0">No messages here yet.</p>
+    </div>
+}
+else
+{
+    @foreach (var m in Visible)
+    {
+        var otp = OtpOf(m);
+        <div class="gl-glass gl-card" style="margin-top:16px">
+            <div class="gl-mail-head">
+                <div class="gl-avatar">V</div>
+                <div class="gl-mail-meta">
+                    <strong>VoteGlass</strong>
+                    <div class="gl-muted gl-small">to @m.ToAddress</div>
+                </div>
+                <span class="gl-pill @(otp is null ? "gl-pill-scheduled" : "")">@(otp is null ? "Invitation" : "Code")</span>
+                <span class="gl-mail-time">@AppTime.Format(m.CreatedAt)</span>
+            </div>
+
+            <div class="gl-mail-subject">@m.Subject</div>
+
+            @if (otp is not null)
+            {
+                <div class="gl-code-box">
+                    <span class="gl-code">@(otp[..3] + " " + otp[3..])</span>
+                    <button type="button" class="gl-btn gl-btn-sm gl-btn-primary" data-code="@otp" onclick="voteGlassCopy(this)">Copy code</button>
+                </div>
+            }
+
+            <div class="gl-mail-body">@Render(m.Body)</div>
+        </div>
+    }
+}
+
+@code {
+    private List<EmailMessage>? messages;
+    private string filter = "all";
+    private bool autoRefresh = true;
+    private System.Threading.Timer? timer;
+
+    private IEnumerable<EmailMessage> Visible => (messages ?? new List<EmailMessage>()).Where(m =>
+        filter == "all" || (filter == "codes" && IsCode(m)) || (filter == "invites" && !IsCode(m)));
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        // Check for new messages every 5 seconds
+        timer = new System.Threading.Timer(_ => _ = InvokeAsync(async () =>
+        {
+            if (!autoRefresh) return;
+            try
+            {
+                await LoadAsync();
+                StateHasChanged();
+            }
+            catch { /* ignore, the next tick will try again */ }
+        }), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+    }
+
+    private async Task LoadAsync()
+    {
+        await using var db = await Factory.CreateDbContextAsync();
+        messages = await db.EmailMessages.AsNoTracking()
+            .OrderByDescending(m => m.CreatedAt).Take(50).ToListAsync();
+    }
+
+    private async Task ClearAsync()
+    {
+        await using var db = await Factory.CreateDbContextAsync();
+        await db.EmailMessages.ExecuteDeleteAsync();
+        await LoadAsync();
+    }
+
+    private static bool IsCode(EmailMessage m) =>
+        m.Subject.Contains("verification code", StringComparison.OrdinalIgnoreCase);
+
+    private static string? OtpOf(EmailMessage m)
+    {
+        if (!IsCode(m)) return null;
+        var match = Regex.Match(m.Body, @"code is:\s*(\d{6})");
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    // Safe display: text is encoded first, then web addresses become clickable links
+    private static MarkupString Render(string body)
+    {
+        var encoded = WebUtility.HtmlEncode(body);
+        var linked = Regex.Replace(encoded, @"https?://[^\s<]+",
+            x => $"<a href=\"{x.Value}\" target=\"_blank\" rel=\"noopener\">{x.Value}</a>");
+        return new MarkupString(linked);
+    }
+
+    public void Dispose() => timer?.Dispose();
+}

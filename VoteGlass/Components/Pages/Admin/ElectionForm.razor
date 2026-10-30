@@ -1,0 +1,192 @@
+﻿@page "/admin/elections/new"
+@page "/admin/elections/{Id:int}"
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using VoteGlass.Models
+@using VoteGlass.Services
+@attribute [Authorize(Roles = "Admin")]
+@inject ElectionService Elections
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Navigation
+@inject GroupService Groups
+
+<PageTitle>Election</PageTitle>
+
+<div class="gl-glass gl-card" style="margin-top:16px">
+    <h2>@(Id is null ? "Create election" : readOnly ? "View election" : "Edit election")</h2>
+
+    @if (loading)
+    {
+        <div class="gl-skeleton" style="height:220px"></div>
+    }
+    else if (missing)
+    {
+        <div class="gl-alert gl-alert-error">Election not found.</div>
+        <a class="gl-btn" href="admin">Back to dashboard</a>
+    }
+    else
+    {
+        @if (readOnly)
+        {
+            <div class="gl-alert">This election has already started, so it can't be edited.</div>
+        }
+        @if (error is not null)
+        {
+            <div class="gl-alert gl-alert-error">@error</div>
+        }
+
+        <EditForm Model="input" OnValidSubmit="SaveAsync" class="gl-form">
+            <DataAnnotationsValidator />
+            <fieldset disabled="@readOnly" style="display:contents;border:0;padding:0;margin:0">
+
+                <div class="gl-field full">
+                    <label>Election title</label>
+                    <InputText class="gl-input" @bind-Value="input.Title" placeholder="e.g. Student Union Elections 2026" />
+                    <ValidationMessage For="() => input.Title" />
+                </div>
+
+                <div class="gl-field full">
+                    <label>What is this election for?</label>
+                    <InputTextArea class="gl-input" rows="3" @bind-Value="input.Description" />
+                    <ValidationMessage For="() => input.Description" />
+                </div>
+
+                <div class="gl-field">
+                    <label>Voting starts</label>
+                    <InputDate Type="InputDateType.DateTimeLocal" class="gl-input" @bind-Value="input.StartTime" />
+                    <ValidationMessage For="() => input.StartTime" />
+                </div>
+
+                <div class="gl-field">
+                    <label>Voting ends</label>
+                    <InputDate Type="InputDateType.DateTimeLocal" class="gl-input" @bind-Value="input.EndTime" />
+                    <ValidationMessage For="() => input.EndTime" />
+                </div>
+                <div class="gl-field">
+                    <label>Minimum voting age (0 = no limit)</label>
+                    <InputNumber class="gl-input" @bind-Value="input.MinimumAge" />
+                    <ValidationMessage For="() => input.MinimumAge" />
+                </div>
+                <div class="gl-field">
+                    <label>Who can see the results?</label>
+                    <InputSelect class="gl-input" @bind-Value="input.ResultVisibility">
+                        <option value="@ResultVisibility.Live">Everyone, live as votes come in</option>
+                        <option value="@ResultVisibility.AfterClose">Only after the election closes</option>
+                        <option value="@ResultVisibility.AfterPublish">Only after I publish them</option>
+                    </InputSelect>
+                </div>
+
+                <div class="gl-field">
+                    <label>Accent color</label>
+                    <InputText type="color" class="gl-input" style="height:46px;padding:4px" @bind-Value="input.AccentColor" />
+                </div>
+                <div class="gl-field full">
+                   <label>Who can vote?</label>
+                   <InputSelect class="gl-input" @bind-Value="input.OpenToEveryone">
+                   <option value="true">Everyone (all approved voters)</option>
+                   <option value="false">Only selected groups</option>
+                   </InputSelect>
+                </div>
+
+@if (!input.OpenToEveryone)
+{
+    <div class="gl-field full">
+        <label>Allowed groups</label>
+        @if (groups.Count == 0)
+        {
+            <p class="gl-muted">No groups yet. Add a Group column to your roster file and import it.</p>
+        }
+        else
+        {
+            <div class="gl-checks">
+                @foreach (var g in groups)
+                {
+                    <label class="gl-check">
+                        <input type="checkbox" checked="@input.GroupIds.Contains(g.Id)"
+                               @onchange="args => ToggleGroup(g.Id, (bool)args.Value!)" />
+                        @g.Name (@g.People)
+                    </label>
+                }
+            </div>
+        }
+    </div>
+}
+            </fieldset>
+
+            <div class="gl-field full">
+                @if (!readOnly)
+                {
+                    <button type="submit" class="gl-btn gl-btn-primary" disabled="@saving">
+                        @(saving ? "Saving..." : Id is null ? "Create election" : "Save changes")
+                    </button>
+                }
+                <a class="gl-btn" href="admin">@(readOnly ? "Back" : "Cancel")</a>
+            </div>
+        </EditForm>
+    }
+</div>
+
+@code {
+    [Parameter] public int? Id { get; set; }
+
+    private ElectionInput input = new();
+    private List<GroupInfo> groups = new();
+    private bool loading = true;
+    private bool saving;
+    private bool readOnly;
+    private bool missing;
+    private string? error;
+    private string userId = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        groups = await Groups.GetGroupsAsync();
+
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "";
+
+        if (Id is not null)
+        {
+            var election = await Elections.GetAsync(Id.Value);
+            if (election is null)
+            {
+                missing = true;
+            }
+            else
+            {
+                input = ElectionInput.From(election);
+                readOnly = !ElectionService.IsEditable(election);
+            }
+        }
+        else
+        {
+            // Default: tomorrow 8:00 AM to 6:00 PM
+            var tomorrow = AppTime.ToLocal(DateTime.UtcNow).Date.AddDays(1).AddHours(8);
+            input.StartTime = tomorrow;
+            input.EndTime = tomorrow.AddHours(10);
+        }
+        loading = false;
+    }
+
+    private async Task SaveAsync()
+    {
+        saving = true;
+        error = null;
+
+        var (ok, err) = await Elections.SaveAsync(userId, Id, input);
+        if (ok)
+        {
+            Navigation.NavigateTo("admin");
+            return;
+        }
+
+        error = err;
+        saving = false;
+    }
+
+    private void ToggleGroup(int id, bool on)
+    {
+        if (on) { if (!input.GroupIds.Contains(id)) input.GroupIds.Add(id); }
+        else input.GroupIds.Remove(id);
+    }
+}

@@ -1,0 +1,122 @@
+﻿@page "/admin/team"
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using VoteGlass.Models
+@using VoteGlass.Services
+@attribute [Authorize(Policy = "OrgOwner")]
+@inject OrganizationService Orgs
+@inject OrgContext Org
+@inject AuthenticationStateProvider AuthProvider
+
+<PageTitle>Team</PageTitle>
+
+<div class="gl-glass gl-card" style="margin-top:16px">
+    <h2 style="margin:0">Team</h2>
+    <p class="gl-muted">People who can run @(access?.OrganizationName ?? "this organisation"): its elections, roster and results. To add someone, they must first register a normal account. Then enter their email here.</p>
+
+    <div class="gl-filters">
+        <input class="gl-input" type="email" placeholder="Email of the account to add" @bind="email" @bind:event="oninput" />
+        <button class="gl-btn gl-btn-primary" disabled="@busy" @onclick="AddAsync">Add as admin</button>
+    </div>
+
+    @if (error is not null)
+    {
+        <div class="gl-alert gl-alert-error">@error</div>
+    }
+    @if (message is not null)
+    {
+        <div class="gl-alert">@message</div>
+    }
+</div>
+
+<div class="gl-glass gl-card" style="margin-top:16px">
+    <h3 style="margin:0 0 8px">Current team</h3>
+
+    @if (team is null)
+    {
+        <div class="gl-skeleton" style="height:80px"></div>
+    }
+    else
+    {
+        <div class="gl-table-wrap">
+            <table class="gl-table">
+                <tr><th>Email</th><th>Role</th><th></th></tr>
+                @foreach (var t in team)
+                {
+                    <tr>
+                        <td>@t.Email @(t.UserId == userId ? "(you)" : "")</td>
+                        <td><span class="gl-pill @(t.Role == OrgRole.Owner ? "" : "gl-pill-scheduled")">@t.Role</span></td>
+                        <td class="gl-actions-cell">
+                            @if (t.Role != OrgRole.Owner)
+                            {
+                                @if (confirmId == t.MemberId)
+                                {
+                                    <button class="gl-btn gl-btn-sm" @onclick="() => RemoveAsync(t.MemberId)">Confirm remove</button>
+                                    <button class="gl-btn gl-btn-sm" @onclick="() => confirmId = null">Cancel</button>
+                                }
+                                else
+                                {
+                                    <button class="gl-btn gl-btn-sm" @onclick="() => confirmId = t.MemberId">Remove</button>
+                                }
+                            }
+                        </td>
+                    </tr>
+                }
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    private OrgAccess? access;
+    private List<TeamMember>? team;
+    private string? email;
+    private string? error;
+    private string? message;
+    private string userId = "";
+    private int? confirmId;
+    private bool busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "";
+        access = await Org.GetAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        team = access is null ? new() : await Orgs.GetTeamAsync(userId, access.OrganizationId);
+        confirmId = null;
+    }
+
+    private async Task AddAsync()
+    {
+        if (access is null) return;
+        error = null;
+        message = null;
+        busy = true;
+
+        error = await Orgs.AddAdminAsync(userId, access.OrganizationId, email);
+        if (error is null)
+        {
+            message = $"{email} can now run this organisation. They'll find it under Organisations.";
+            email = "";
+        }
+
+        busy = false;
+        await LoadAsync();
+    }
+
+    private async Task RemoveAsync(int memberId)
+    {
+        if (access is null) return;
+        error = null;
+        message = null;
+
+        error = await Orgs.RemoveMemberAsync(userId, access.OrganizationId, memberId);
+        if (error is null) message = "Removed from the team.";
+        await LoadAsync();
+    }
+}

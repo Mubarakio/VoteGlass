@@ -1,0 +1,182 @@
+﻿@page "/voter"
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using VoteGlass.Models
+@using VoteGlass.Services
+@attribute [Authorize(Roles = "Voter")]
+@inject VoterProfileService Profiles
+@inject VoterElectionService VoterElections
+@inject VotingService Voting
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Navigation
+
+<PageTitle>Voter Home</PageTitle>
+
+<div class="gl-glass gl-card" style="margin-top:16px">
+    @if (loading)
+    {
+        <div class="gl-skeleton" style="height:100px"></div>
+    }
+    else if (profile is null)
+    {
+        <h2 style="margin-top:0">Welcome</h2>
+        <p class="gl-muted">Complete your voter profile to join organisations and vote in their elections.</p>
+        <a class="gl-btn gl-btn-primary" href="voter/profile">Complete my profile</a>
+        <a class="gl-btn" href="organisations">Run your own elections</a>
+    }
+    else
+    {
+        <h2 style="margin-top:0">Welcome, @profile.FullName</h2>
+        <a class="gl-btn gl-btn-sm" href="voter/profile">Edit my profile</a>
+        <a class="gl-btn gl-btn-sm" href="organisations">Run your own elections</a>
+    }
+</div>
+
+@if (profile is not null)
+{
+    <div class="gl-glass gl-card" style="margin-top:16px">
+        <h3 style="margin:0 0 8px">Your organisations</h3>
+
+        @if (memberships is null)
+        {
+            <div class="gl-skeleton" style="height:60px"></div>
+        }
+        else if (memberships.Count == 0)
+        {
+            <p class="gl-muted" style="margin:0">You haven't joined an organisation yet. Open the invitation link you received, or an election link, to join one.</p>
+        }
+        else
+        {
+            @foreach (var m in memberships)
+            {
+                <div class="gl-cand-row">
+                    <strong>@m.OrganizationName</strong>
+                    @if (!string.IsNullOrWhiteSpace(m.GroupName))
+                    {
+                        <span class="gl-pill gl-pill-scheduled">@m.GroupName</span>
+                    }
+                </div>
+            }
+        }
+    </div>
+
+    <div class="gl-glass gl-card" style="margin-top:16px">
+        <div class="gl-glass gl-card" style="margin-top:16px">
+            <h3 style="margin:0 0 8px">Paste the invitation link or join code you were sent</h3>
+            <p class="gl-muted">Paste the invitation link you were sent. On the next page you'll enter your registration number.</p>
+
+            @if (joinError is not null)
+            {
+                <div class="gl-alert gl-alert-error">@joinError</div>
+            }
+
+            <div class="gl-filters">
+                <input class="gl-input" placeholder="Paste your invitation link here" @bind="joinText" @bind:event="oninput" />
+                <button class="gl-btn gl-btn-primary" @onclick="GoToJoin">Continue</button>
+            </div>
+        </div>
+        <h3 style="margin:0 0 8px">Your elections</h3>
+
+        @if (elections is null)
+        {
+            <div class="gl-skeleton" style="height:100px"></div>
+        }
+        else if (elections.Count == 0)
+        {
+            <p class="gl-muted" style="margin:0">There are no elections open to you right now.</p>
+        }
+        else
+        {
+            @foreach (var item in elections)
+            {
+                <div class="gl-cand-row">
+                    <div>
+                        <strong><span class="gl-swatch" style="background:@item.Election.AccentColor"></span> @item.Election.Title</strong>
+                        <div class="gl-muted gl-small">@item.OrganizationName</div>
+                        @if (!string.IsNullOrWhiteSpace(item.Election.Description))
+                        {
+                            <p class="gl-muted">@item.Election.Description</p>
+                        }
+                        <p class="gl-muted gl-small">
+                            @AppTime.Format(item.Election.StartTime) to @AppTime.Format(item.Election.EndTime)
+                        </p>
+                    </div>
+                    <div style="white-space:nowrap">
+                        <span class="gl-pill @PillClass(item.Status)">@item.Status</span>
+
+                        @if (item.Status == ElectionStatus.Live)
+                        {
+                            @if (votedIds.Contains(item.Election.Id))
+                            {
+                                <span class="gl-pill">Voted ✓</span>
+                            }
+                            else
+                            {
+                                <a class="gl-btn gl-btn-sm gl-btn-primary" href="voter/elections/@item.Election.Id/vote">Vote now</a>
+                            }
+                        }
+
+                        @if (ResultsService.VotersCanSee(item.Election))
+                        {
+                            <a class="gl-btn gl-btn-sm" href="voter/elections/@item.Election.Id/results">@(item.Status == ElectionStatus.Live ? "Live results" : "Results")</a>
+                        }
+                        else if (item.Status == ElectionStatus.Closed)
+                        {
+                            <span class="gl-muted gl-small">Results not published yet</span>
+                        }
+
+                        <button type="button" class="gl-btn gl-btn-sm" data-code="@ElectionLink(item.Election.Id)" onclick="voteGlassCopy(this)">Copy link</button>
+                    </div>
+                </div>
+            }
+        }
+    </div>
+}
+
+@code {
+    private VoterProfile? profile;
+    private List<VoterMembership>? memberships;
+    private List<VoterElection>? elections;
+    private HashSet<int> votedIds = new();
+    private bool loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        var userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "";
+
+        profile = await Profiles.GetByUserIdAsync(userId);
+        loading = false;
+        if (profile is null) return;
+
+        memberships = await VoterElections.GetMembershipsAsync(userId);
+        elections = await VoterElections.GetForVoterAsync(userId);
+        votedIds = await Voting.GetVotedElectionIdsAsync(userId);
+    }
+
+    private string ElectionLink(int id) => $"{Navigation.BaseUri}e/{id}";
+
+    private static string PillClass(ElectionStatus s) => s switch
+    {
+        ElectionStatus.Live => "gl-pill-live",
+        ElectionStatus.Scheduled => "gl-pill-scheduled",
+        _ => "gl-pill-closed"
+    };
+    private string joinText = "";
+    private string? joinError;
+
+   private void GoToJoin()
+{
+    joinError = null;
+    var match = System.Text.RegularExpressions.Regex.Match(joinText ?? "", @"/join/([A-Za-z0-9]{6,20})");
+    var code = match.Success ? match.Groups[1].Value : (joinText ?? "").Trim();
+
+    if (code.Length < 6 || code.Length > 20 || !code.All(char.IsLetterOrDigit))
+    {
+        joinError = "Paste the full invitation link, or the join code.";
+        return;
+    }
+
+    Navigation.NavigateTo($"join/{code}");
+}
+}

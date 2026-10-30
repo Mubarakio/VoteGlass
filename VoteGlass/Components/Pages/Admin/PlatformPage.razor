@@ -1,0 +1,114 @@
+﻿@page "/platform"
+@using Microsoft.AspNetCore.Authorization
+@using VoteGlass.Services
+@attribute [Authorize(Policy = "MainAdmin")]
+@inject PlatformService Platform
+
+<PageTitle>Platform</PageTitle>
+
+@if (data is not null)
+{
+    <div class="gl-grid" style="margin-top:16px">
+        <div class="gl-glass gl-card"><div class="gl-muted">Organisations</div><div class="gl-stat">@data.Stats.Organisations</div></div>
+        <div class="gl-glass gl-card"><div class="gl-muted">Suspended</div><div class="gl-stat">@data.Stats.Suspended</div></div>
+        <div class="gl-glass gl-card"><div class="gl-muted">Accounts</div><div class="gl-stat">@data.Stats.Users</div></div>
+        <div class="gl-glass gl-card"><div class="gl-muted">Elections</div><div class="gl-stat">@data.Stats.Elections</div></div>
+        <div class="gl-glass gl-card"><div class="gl-muted">Ballots cast</div><div class="gl-stat">@data.Stats.Ballots</div></div>
+    </div>
+}
+
+<div class="gl-glass gl-card" style="margin-top:16px">
+    <h2 style="margin:0">All organisations</h2>
+    <p class="gl-muted">You see who runs each organisation and how big it is, but never who voted for whom. Suspending locks the organisation's admins out and hides its elections from voters.</p>
+
+    <div class="gl-filters">
+        <input class="gl-input" placeholder="Search by name" @bind="search" @bind:after="SearchAsync" />
+    </div>
+
+    @if (error is not null)
+    {
+        <div class="gl-alert gl-alert-error">@error</div>
+    }
+
+    @if (data is null)
+    {
+        <div class="gl-skeleton" style="height:120px"></div>
+    }
+    else if (data.Items.Count == 0)
+    {
+        <p class="gl-muted">No organisations match.</p>
+    }
+    else
+    {
+        <div class="gl-table-wrap">
+            <table class="gl-table">
+                <tr><th>Name</th><th>Owner</th><th>Created</th><th>Elections</th><th>Roster</th><th>Joined</th><th>Status</th><th></th></tr>
+                @foreach (var o in data.Items)
+                {
+                    <tr>
+                        <td>@o.Name</td>
+                        <td>@o.OwnerEmail</td>
+                        <td>@AppTime.Format(o.CreatedAt)</td>
+                        <td>@o.Elections</td>
+                        <td>@o.Roster</td>
+                        <td>@o.Members</td>
+                        <td>
+                            @if (o.IsSuspended)
+                            {
+                                <span class="gl-pill gl-pill-live">Suspended</span>
+                            }
+                            else
+                            {
+                                <span class="gl-pill">Active</span>
+                            }
+                        </td>
+                        <td class="gl-actions-cell">
+                            @if (confirmId == o.Id)
+                            {
+                                <button class="gl-btn gl-btn-sm" @onclick="() => SetAsync(o.Id, !o.IsSuspended)">Confirm</button>
+                                <button class="gl-btn gl-btn-sm" @onclick="() => confirmId = null">Cancel</button>
+                            }
+                            else
+                            {
+                                <button class="gl-btn gl-btn-sm" @onclick="() => confirmId = o.Id">@(o.IsSuspended ? "Reactivate" : "Suspend")</button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </table>
+        </div>
+
+        <div class="gl-pager">
+            <button class="gl-btn gl-btn-sm" disabled="@(page <= 1)" @onclick="PrevAsync">Previous</button>
+            <span class="gl-muted">Page @(page) of @totalPages</span>
+            <button class="gl-btn gl-btn-sm" disabled="@(page >= totalPages)" @onclick="NextAsync">Next</button>
+        </div>
+    }
+</div>
+
+@code {
+    private PlatformPageData? data;
+    private string? search;
+    private string? error;
+    private int page = 1;
+    private int? confirmId;
+    private int totalPages => data is null ? 1 : Math.Max(1, (int)Math.Ceiling(data.Total / (double)PlatformService.PageSize));
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        data = await Platform.GetAsync(search, page);
+        confirmId = null;
+    }
+
+    private async Task SearchAsync() { page = 1; await LoadAsync(); }
+    private async Task PrevAsync() { page--; await LoadAsync(); }
+    private async Task NextAsync() { page++; await LoadAsync(); }
+
+    private async Task SetAsync(int id, bool suspended)
+    {
+        error = await Platform.SetSuspendedAsync(id, suspended);
+        await LoadAsync();
+    }
+}

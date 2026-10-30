@@ -1,0 +1,307 @@
+﻿@page "/admin/elections/{Id:int}/ballot"
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using VoteGlass.Models
+@using VoteGlass.Services
+@attribute [Authorize(Policy = "OrgAdmin")]
+@inject ElectionService Elections
+@inject BallotService Ballot
+@inject AuthenticationStateProvider AuthProvider
+
+<PageTitle>Ballot setup</PageTitle>
+
+@if (loading)
+{
+    <div class="gl-skeleton" style="height:200px;margin-top:16px"></div>
+}
+else if (election is null)
+{
+    <div class="gl-glass gl-card" style="margin-top:16px">
+        <div class="gl-alert gl-alert-error">Election not found.</div>
+        <a class="gl-btn" href="admin">Back to dashboard</a>
+    </div>
+}
+else
+{
+    <div class="gl-glass gl-card" style="margin-top:16px">
+        <div class="gl-row">
+            <div>
+                <h2 style="margin:0">@election.Title</h2>
+                <div class="gl-muted">Positions and candidates</div>
+            </div>
+            <div>
+                @if (editable)
+                {
+                    <button class="gl-btn gl-btn-primary" @onclick="StartAddPosition">+ Add position</button>
+                }
+                <a class="gl-btn" href="admin">Back</a>
+            </div>
+        </div>
+
+        @if (!editable)
+        {
+            <div class="gl-alert">This election has started, so the ballot can't be changed.</div>
+        }
+        @if (error is not null)
+        {
+            <div class="gl-alert gl-alert-error">@error</div>
+        }
+    </div>
+
+    @if (showPositionForm)
+    {
+        <div class="gl-glass gl-card" style="margin-top:16px">
+            <h3>@(editingPositionId is null ? "Add a position" : "Edit position")</h3>
+            <EditForm Model="positionInput" OnValidSubmit="SavePositionAsync" class="gl-form">
+                <DataAnnotationsValidator />
+                <div class="gl-field full">
+                    <label>Position title</label>
+                    <InputText class="gl-input" @bind-Value="positionInput.Title" placeholder="e.g. President" />
+                    <ValidationMessage For="() => positionInput.Title" />
+                </div>
+                <div class="gl-field full">
+                    <label>Description (optional)</label>
+                    <InputText class="gl-input" @bind-Value="positionInput.Description" />
+                </div>
+                <div class="gl-field">
+                    <label>Votes per voter</label>
+                    <InputNumber class="gl-input" @bind-Value="positionInput.MaxSelections" />
+                    <ValidationMessage For="() => positionInput.MaxSelections" />
+                </div>
+                <div class="gl-field">
+                    <label>If there's a tie</label>
+                    <InputSelect class="gl-input" @bind-Value="positionInput.TieHandling">
+                        @foreach (var t in Enum.GetValues<TieHandling>())
+                        {
+                            <option value="@t">@TieText(t)</option>
+                        }
+                    </InputSelect>
+                </div>
+                <div class="gl-field full">
+                    <label><InputCheckbox @bind-Value="positionInput.AllowAbstain" /> Allow voters to abstain</label>
+                </div>
+                <div class="gl-field full">
+                    <button type="submit" class="gl-btn gl-btn-primary">Save position</button>
+                    <button type="button" class="gl-btn" @onclick="CancelPosition">Cancel</button>
+                </div>
+            </EditForm>
+        </div>
+    }
+
+    @if (positions.Count == 0 && !showPositionForm)
+    {
+        <div class="gl-glass gl-card" style="margin-top:16px">
+            <p class="gl-muted">No positions yet. Click "Add position" to start, for example President or Secretary.</p>
+        </div>
+    }
+
+    @foreach (var p in positions)
+    {
+        <div class="gl-glass gl-card" style="margin-top:16px">
+            <div class="gl-row">
+                <div>
+                    <h3 style="margin:0">@p.Title</h3>
+                    <div class="gl-muted">
+                        Votes per voter: @p.MaxSelections · Abstain @(p.AllowAbstain ? "allowed" : "not allowed") · Tie: @TieText(p.TieHandling)
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(p.Description))
+                    {
+                        <p class="gl-muted" style="margin:6px 0 0">@p.Description</p>
+                    }
+                </div>
+                @if (editable)
+                {
+                    <div>
+                        <button class="gl-btn gl-btn-sm" @onclick="() => StartEditPosition(p)">Edit</button>
+                        @if (confirmDeletePositionId == p.Id)
+                        {
+                            <button class="gl-btn gl-btn-sm" @onclick="() => DeletePositionAsync(p.Id)">Confirm delete</button>
+                            <button class="gl-btn gl-btn-sm" @onclick="() => confirmDeletePositionId = null">Cancel</button>
+                        }
+                        else
+                        {
+                            <button class="gl-btn gl-btn-sm" @onclick="() => confirmDeletePositionId = p.Id">Delete</button>
+                        }
+                    </div>
+                }
+            </div>
+
+            <div style="margin-top:12px">
+                @if (p.Candidates.Count == 0)
+                {
+                    <p class="gl-muted">No candidates yet.</p>
+                }
+                @foreach (var c in p.Candidates)
+                {
+                    <div class="gl-cand-row">
+                        <div>
+                            <strong>@c.FullName</strong>
+                            @if (!string.IsNullOrWhiteSpace(c.Manifesto))
+                            {
+                                <p class="gl-muted">@c.Manifesto</p>
+                            }
+                        </div>
+                        @if (editable)
+                        {
+                            <div style="white-space:nowrap">
+                                <button class="gl-btn gl-btn-sm" @onclick="() => StartEditCandidate(p.Id, c)">Edit</button>
+                                @if (confirmDeleteCandidateId == c.Id)
+                                {
+                                    <button class="gl-btn gl-btn-sm" @onclick="() => DeleteCandidateAsync(c.Id)">Confirm</button>
+                                    <button class="gl-btn gl-btn-sm" @onclick="() => confirmDeleteCandidateId = null">Cancel</button>
+                                }
+                                else
+                                {
+                                    <button class="gl-btn gl-btn-sm" @onclick="() => confirmDeleteCandidateId = c.Id">Delete</button>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+
+            @if (editable && candidatePositionId != p.Id)
+            {
+                <button class="gl-btn gl-btn-sm" style="margin-top:10px" @onclick="() => StartAddCandidate(p.Id)">+ Add candidate</button>
+            }
+
+            @if (candidatePositionId == p.Id)
+            {
+                <div class="gl-subform">
+                    <h3>@(editingCandidateId is null ? "Add a candidate" : "Edit candidate")</h3>
+                    <EditForm Model="candidateInput" OnValidSubmit="SaveCandidateAsync" class="gl-form">
+                        <DataAnnotationsValidator />
+                        <div class="gl-field full">
+                            <label>Candidate name</label>
+                            <InputText class="gl-input" @bind-Value="candidateInput.FullName" />
+                            <ValidationMessage For="() => candidateInput.FullName" />
+                        </div>
+                        <div class="gl-field full">
+                            <label>Manifesto (optional)</label>
+                            <InputTextArea class="gl-input" rows="3" @bind-Value="candidateInput.Manifesto" />
+                            <ValidationMessage For="() => candidateInput.Manifesto" />
+                        </div>
+                        <div class="gl-field full">
+                            <button type="submit" class="gl-btn gl-btn-primary">Save candidate</button>
+                            <button type="button" class="gl-btn" @onclick="CancelCandidate">Cancel</button>
+                        </div>
+                    </EditForm>
+                </div>
+            }
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private Election? election;
+    private List<Position> positions = new();
+    private bool loading = true;
+    private bool editable;
+    private string? error;
+    private string userId = "";
+
+    private bool showPositionForm;
+    private int? editingPositionId;
+    private PositionInput positionInput = new();
+
+    private int? candidatePositionId;
+    private int? editingCandidateId;
+    private CandidateInput candidateInput = new();
+
+    private int? confirmDeletePositionId;
+    private int? confirmDeleteCandidateId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "";
+
+        election = await Elections.GetAsync(Id);
+        if (election is not null)
+        {
+            editable = ElectionService.IsEditable(election);
+            positions = await Ballot.GetPositionsAsync(Id);
+        }
+        loading = false;
+    }
+
+    private async Task ReloadAsync()
+    {
+        positions = await Ballot.GetPositionsAsync(Id);
+        confirmDeletePositionId = null;
+        confirmDeleteCandidateId = null;
+    }
+
+    // ----- positions -----
+    private void StartAddPosition()
+    {
+        error = null;
+        editingPositionId = null;
+        positionInput = new();
+        showPositionForm = true;
+    }
+
+    private void StartEditPosition(Position p)
+    {
+        error = null;
+        editingPositionId = p.Id;
+        positionInput = PositionInput.From(p);
+        showPositionForm = true;
+    }
+
+    private void CancelPosition() => showPositionForm = false;
+
+    private async Task SavePositionAsync()
+    {
+        error = await Ballot.SavePositionAsync(userId, Id, editingPositionId, positionInput);
+        if (error is null) showPositionForm = false;
+        await ReloadAsync();
+    }
+
+    private async Task DeletePositionAsync(int positionId)
+    {
+        error = await Ballot.DeletePositionAsync(userId, positionId);
+        await ReloadAsync();
+    }
+
+    // ----- candidates -----
+    private void StartAddCandidate(int positionId)
+    {
+        error = null;
+        candidatePositionId = positionId;
+        editingCandidateId = null;
+        candidateInput = new();
+    }
+
+    private void StartEditCandidate(int positionId, Candidate c)
+    {
+        error = null;
+        candidatePositionId = positionId;
+        editingCandidateId = c.Id;
+        candidateInput = CandidateInput.From(c);
+    }
+
+    private void CancelCandidate() => candidatePositionId = null;
+
+    private async Task SaveCandidateAsync()
+    {
+        error = await Ballot.SaveCandidateAsync(userId, candidatePositionId!.Value, editingCandidateId, candidateInput);
+        if (error is null) candidatePositionId = null;
+        await ReloadAsync();
+    }
+
+    private async Task DeleteCandidateAsync(int candidateId)
+    {
+        error = await Ballot.DeleteCandidateAsync(userId, candidateId);
+        await ReloadAsync();
+    }
+
+    private static string TieText(TieHandling t) => t switch
+    {
+        TieHandling.AdminDecides => "Admin decides",
+        TieHandling.RunOff => "Run-off election",
+        _ => "Declare a tie"
+    };
+}

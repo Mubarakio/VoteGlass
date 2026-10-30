@@ -1,0 +1,18 @@
+﻿@using VoteGlass.Components.Account.Shared
+<Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
+    <Found Context="routeData">
+        <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
+              <NotAuthorized>
+                     @if (context.User.Identity?.IsAuthenticated != true)
+                       {
+                           <RedirectToLogin />
+                       }
+                    else
+                       {
+                          <p class="m-4">You don't have access to this page. <a href="organisations">Choose or create an organisation</a>.</p>
+                       }
+              </NotAuthorized>
+       </AuthorizeRouteView>
+        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+    </Found>
+</Router>

@@ -1,0 +1,76 @@
+﻿@inherits LayoutComponentBase
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+@using VoteGlass.Services
+@inject OrganizationService Orgs
+
+<div class="gl-bg"><i></i><i></i><i></i></div>
+
+<header class="gl-nav gl-glass">
+    <a class="gl-logo" href="">Vote<b>Glass</b></a>
+
+    <nav class="gl-links">
+        <AuthorizeView Policy="OrgAdmin" Context="orgCtx">
+            <a href="admin">Elections</a>
+            <a href="admin/roster">Roster</a>
+        </AuthorizeView>
+        <AuthorizeView Policy="OrgOwner" Context="ownerCtx">
+            <a href="admin/team">Team</a>
+        </AuthorizeView>
+        <AuthorizeView Roles="Voter" Context="voterCtx">
+            <a href="voter">My Voting</a>
+            <a href="voter/profile">My Profile</a>
+        </AuthorizeView>
+        <AuthorizeView Context="anyCtx">
+            <a href="organisations">@(orgName is null ? "Organisations" : orgName + " ▾")</a>
+        </AuthorizeView>
+        <AuthorizeView Policy="MainAdmin" Context="mainCtx">
+            <a href="admin/outbox">Test inbox</a>
+            <a href="platform">Platform</a>
+        </AuthorizeView>
+    </nav>
+
+    <div class="gl-actions">
+        <button type="button" class="gl-btn gl-icon" onclick="voteGlassTheme.toggle()" title="Switch light/dark" aria-label="Switch light or dark theme">◐</button>
+        <AuthorizeView>
+            <Authorized>
+                <a class="gl-btn" href="Account/Manage">@context.User.Identity?.Name</a>
+                <form action="Account/Logout" method="post">
+                    <AntiforgeryToken />
+                    <input type="hidden" name="ReturnUrl" value="" />
+                    <button type="submit" class="gl-btn">Logout</button>
+                </form>
+            </Authorized>
+            <NotAuthorized>
+                <a class="gl-btn" href="Account/Login">Login</a>
+                <a class="gl-btn gl-btn-primary" href="Account/Register">Register</a>
+            </NotAuthorized>
+        </AuthorizeView>
+    </div>
+</header>
+
+<main class="gl-main">
+    @Body
+</main>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState>? AuthState { get; set; }
+
+    private string? orgName;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (AuthState is null) return;
+
+        var state = await AuthState;
+        var userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (userId is not null)
+            orgName = (await Orgs.GetAccessAsync(userId))?.OrganizationName;
+    }
+}

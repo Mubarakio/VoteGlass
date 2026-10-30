@@ -1,0 +1,39 @@
+﻿@page "/"
+
+<PageTitle>VoteGlass</PageTitle>
+
+<section class="gl-hero gl-glass">
+    <span class="gl-pill">Secure · Private · Live</span>
+    <h1>Your voice, counted in real time.</h1>
+    <p class="gl-muted">Create elections, cast private ballots, and watch the results update live.</p>
+
+    <AuthorizeView>
+        <Authorized>
+            <AuthorizeView Roles="Admin" Context="adminCtx">
+                <a class="gl-btn gl-btn-primary" href="admin">Open admin dashboard</a>
+            </AuthorizeView>
+            <AuthorizeView Roles="Voter" Context="voterCtx">
+                <a class="gl-btn gl-btn-primary" href="voter">Go to my voting page</a>
+            </AuthorizeView>
+        </Authorized>
+        <NotAuthorized>
+            <a class="gl-btn gl-btn-primary" href="Account/Register">Get started</a>
+            <a class="gl-btn" href="Account/Login">Log in</a>
+        </NotAuthorized>
+    </AuthorizeView>
+</section>
+
+<div class="gl-grid">
+    <div class="gl-glass gl-card">
+        <h3>Private ballots</h3>
+        <p class="gl-muted">Your choice is stored separately from your identity, so nobody can see who you voted for.</p>
+    </div>
+    <div class="gl-glass gl-card">
+        <h3>Live results</h3>
+        <p class="gl-muted">Watch the numbers move as votes come in, with charts that update instantly.</p>
+    </div>
+    <div class="gl-glass gl-card">
+        <h3>Easy to run</h3>
+        <p class="gl-muted">Admins can set up positions, candidates, voters, and timing in a few clicks.</p>
+    </div>
+</div>

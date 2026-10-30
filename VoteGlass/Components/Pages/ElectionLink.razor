@@ -1,0 +1,49 @@
+﻿@page "/e/{Id:int}"
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using VoteGlass.Models
+@using VoteGlass.Services
+@attribute [Authorize]
+@inject ElectionService Elections
+@inject VoterElectionService VoterElections
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Navigation
+
+<PageTitle>Election</PageTitle>
+
+<div class="gl-glass gl-card" style="margin-top:16px">
+    <div class="gl-skeleton" style="height:80px"></div>
+</div>
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var election = await Elections.GetAnyAsync(Id);
+        if (election is null)
+        {
+            Navigation.NavigateTo("voter");
+            return;
+        }
+
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        var userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "";
+
+        var target = ElectionService.StatusOf(election) == ElectionStatus.Closed
+            ? $"/voter/elections/{Id}/results"
+            : $"/voter/elections/{Id}/vote";
+
+        // Not a member of this organisation yet: join first, then carry on to the election
+        if (!await VoterElections.IsMemberAsync(userId, election.OrganizationId))
+{
+    var joinCode = election.Organization?.JoinCode;
+    if (joinCode is null)
+    {
+        Navigation.NavigateTo("voter");
+        return;
+    }
+    target = $"/join/{joinCode}?returnUrl={Uri.EscapeDataString(target)}";
+}
+    }
+}

@@ -1,0 +1,285 @@
+﻿@page "/admin/roster"
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using VoteGlass.Models
+@using VoteGlass.Services
+@attribute [Authorize(Policy = "OrgAdmin")]
+@inject RosterService Roster
+@inject InvitationService Invites
+@inject NavigationManager Navigation
+@inject AuthenticationStateProvider AuthProvider
+
+<PageTitle>Voter roster</PageTitle>
+
+<div class="gl-glass gl-card" style="margin-top:16px">
+    <h2 style="margin:0">Voter roster</h2>
+    <p class="gl-muted">Your official list of people allowed to vote. Upload a .csv file with the columns RegistrationNumber, FullName, Email, Phone, DateOfBirth and Group. Only the first two are required.</p>
+
+    <InputFile OnChange="OnFileChosen" accept=".csv" class="gl-input" />
+
+    @if (error is not null)
+    {
+        <div class="gl-alert gl-alert-error">@error</div>
+    }
+    @if (message is not null)
+    {
+        <div class="gl-alert">@message</div>
+    }
+</div>
+
+@if (preview is not null)
+{
+    <div class="gl-glass gl-card" style="margin-top:16px">
+        <h3>Preview</h3>
+        <p>
+            <span class="gl-pill">@preview.NewCount new</span>
+            <span class="gl-pill gl-pill-scheduled">@preview.UpdateCount will be updated</span>
+            @if (preview.Errors.Count > 0)
+            {
+                <span class="gl-pill gl-pill-live">@preview.Errors.Count rows with problems</span>
+            }
+        </p>
+
+        @if (preview.NoContactCount > 0)
+        {
+            <div class="gl-alert gl-alert-error">@preview.NoContactCount people have no email or phone, so they won't be able to verify themselves.</div>
+        }
+
+        @if (preview.Errors.Count > 0)
+        {
+            <p class="gl-muted">These rows will be skipped:</p>
+            <ul class="gl-errors">
+                @foreach (var err in preview.Errors.Take(20))
+                {
+                    <li>@err</li>
+                }
+                @if (preview.Errors.Count > 20)
+                {
+                    <li>...and @(preview.Errors.Count - 20) more.</li>
+                }
+            </ul>
+        }
+
+        <button class="gl-btn gl-btn-primary" disabled="@(preview.Rows.Count == 0 || importing)" @onclick="ImportAsync">
+            @(importing ? "Importing..." : $"Import {preview.Rows.Count} people")
+        </button>
+        <button class="gl-btn" @onclick="() => preview = null">Cancel</button>
+    </div>
+}
+
+<div class="gl-glass gl-card" style="margin-top:16px">
+    <div class="gl-row">
+        <h3 style="margin:0">On the roster (@total)</h3>
+        <div class="gl-row">
+            <input class="gl-input gl-search" placeholder="Search name, number or email"
+                   @bind="search" @bind:after="SearchAsync" />
+            <button class="gl-btn gl-btn-primary" disabled="@inviting" @onclick="InviteAllAsync">
+                @(inviting ? "Sending..." : "Invite everyone not yet invited")
+            </button>
+        </div>
+    </div>
+
+    @if (items is null)
+    {
+        <div class="gl-skeleton" style="height:120px;margin-top:14px"></div>
+    }
+    else if (items.Count == 0)
+    {
+        <p class="gl-muted">Nothing here yet. Upload a CSV to get started.</p>
+    }
+    else
+    {
+        <div class="gl-table-wrap">
+            <table class="gl-table">
+                <tr><th>Reg. number</th><th>Name</th><th>Email</th><th>Group</th><th>Invited</th><th>Status</th><th></th></tr>
+                @foreach (var e in items)
+                {
+                    <tr>
+                        <td>@e.RegistrationNumber</td>
+                        <td>@e.FullName</td>
+                        <td>@e.Email</td>
+                        <td>@e.GroupName</td>
+                        <td>@(e.InvitedAt is null ? "Not yet" : AppTime.Format(e.InvitedAt.Value))</td>
+<td>
+    @if (e.Blocked)
+    {
+        <span class="gl-pill gl-pill-live">Blocked</span>
+    }
+    else if (e.ClaimedByVoterProfileId is not null)
+    {
+        <span class="gl-pill">Registered</span>
+    }
+    else
+    {
+        <span class="gl-pill gl-pill-draft">Not yet</span>
+    }
+</td>
+<td class="gl-actions-cell">
+    @if (e.ClaimedByVoterProfileId is not null)
+    {
+        @if (confirmBlockId == e.Id)
+        {
+            <button class="gl-btn gl-btn-sm" @onclick="() => SetBlockedAsync(e.Id, true)">Confirm remove</button>
+            <button class="gl-btn gl-btn-sm" @onclick="() => confirmBlockId = null">Cancel</button>
+        }
+        else
+        {
+            <button class="gl-btn gl-btn-sm" @onclick="() => confirmBlockId = e.Id">Remove access</button>
+        }
+    }
+    else
+    {
+        @if (e.Blocked)
+        {
+            <button class="gl-btn gl-btn-sm" @onclick="() => SetBlockedAsync(e.Id, false)">Allow again</button>
+        }
+        else if (!string.IsNullOrWhiteSpace(e.Email))
+        {
+            <button class="gl-btn gl-btn-sm" @onclick="() => InviteOneAsync(e.Id)">@(e.InvitedAt is null ? "Invite" : "Remind")</button>
+        }
+
+        @if (confirmDeleteId == e.Id)
+        {
+            <button class="gl-btn gl-btn-sm" @onclick="() => DeleteAsync(e.Id)">Confirm</button>
+            <button class="gl-btn gl-btn-sm" @onclick="() => confirmDeleteId = null">Cancel</button>
+        }
+        else
+        {
+            <button class="gl-btn gl-btn-sm" @onclick="() => confirmDeleteId = e.Id">Delete</button>
+        }
+    }
+</td>
+                    </tr>
+                }
+            </table>
+        </div>
+
+        <div class="gl-pager">
+            <button class="gl-btn gl-btn-sm" disabled="@(page <= 1)" @onclick="PrevAsync">Previous</button>
+            <span class="gl-muted">Page @(page) of @totalPages</span>
+            <button class="gl-btn gl-btn-sm" disabled="@(page >= totalPages)" @onclick="NextAsync">Next</button>
+        </div>
+    }
+</div>
+
+@code {
+    private RosterPreview? preview;
+    private List<RosterEntry>? items;
+    private string? error;
+    private string? message;
+    private string? search;
+    private string userId = "";
+    private int page = 1;
+    private int total;
+    private int totalPages => Math.Max(1, (int)Math.Ceiling(total / (double)RosterService.PageSize));
+    private int? confirmDeleteId;
+    private bool importing;
+    private bool inviting;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "";
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var result = await Roster.GetPageAsync(search, page);
+        items = result.Items;
+        total = result.Total;
+        confirmDeleteId = null;
+    }
+
+    private async Task SearchAsync() { page = 1; await LoadAsync(); }
+    private async Task PrevAsync() { page--; await LoadAsync(); }
+    private async Task NextAsync() { page++; await LoadAsync(); }
+
+    private async Task OnFileChosen(InputFileChangeEventArgs e)
+    {
+        error = null;
+        message = null;
+        preview = null;
+
+        var file = e.File;
+        if (!file.Name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
+        {
+            error = "Please choose a .csv file.";
+            return;
+        }
+
+        try
+        {
+            using var stream = file.OpenReadStream(maxAllowedSize: 2 * 1024 * 1024);
+            using var reader = new StreamReader(stream);
+            var text = await reader.ReadToEndAsync();
+            preview = await Roster.PreviewAsync(text);
+        }
+        catch (IOException)
+        {
+            error = "The file is too large (the limit is 2 MB) or couldn't be read.";
+        }
+    }
+
+    private async Task ImportAsync()
+    {
+        if (preview is null) return;
+        importing = true;
+
+        var (added, updated) = await Roster.ImportAsync(userId, preview.Rows);
+        message = $"Import complete: {added} added, {updated} updated.";
+        preview = null;
+        importing = false;
+
+        page = 1;
+        await LoadAsync();
+    }
+    private int? confirmBlockId;
+
+    private async Task SetBlockedAsync(int id, bool blocked)
+    {
+      error = await Roster.SetBlockedAsync(userId, id, blocked);
+      confirmBlockId = null;
+      await LoadAsync();
+    }
+
+    private async Task DeleteAsync(int id)
+    {
+        error = await Roster.DeleteAsync(userId, id);
+        await LoadAsync();
+    }
+
+    private async Task InviteOneAsync(int id)
+    {
+        error = null;
+        message = null;
+        var result = await Invites.InviteOneAsync(userId, Navigation.BaseUri, id);
+        if (result.Error is not null) error = result.Error;
+        else message = "Invitation sent.";
+        await LoadAsync();
+    }
+
+    private async Task InviteAllAsync()
+    {
+        error = null;
+        message = null;
+        inviting = true;
+
+        var result = await Invites.InviteAllNewAsync(userId, Navigation.BaseUri);
+        if (result.Error is not null)
+        {
+            error = result.Error;
+        }
+        else
+        {
+            message = result.Sent == 0
+                ? "Everyone with an email address has already been invited."
+                : result.Remaining > 0
+                    ? $"Sent {result.Sent} invitations. {result.Remaining} left, click the button again to send the rest."
+                    : $"Sent {result.Sent} invitations.";
+        }
+
+        inviting = false;
+        await LoadAsync();
+    }
+}

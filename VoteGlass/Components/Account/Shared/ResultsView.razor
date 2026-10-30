@@ -1,0 +1,209 @@
+﻿@using System.Globalization
+@using VoteGlass.Models
+@using VoteGlass.Services
+
+<div class="gl-grid" style="margin-top:16px">
+    <div class="gl-glass gl-card">
+        <div class="gl-muted">Turnout</div>
+        <div class="gl-stat">@TurnoutPercent.ToString("0")%</div>
+        <div class="gl-bar"><span style="width:@F(TurnoutPercent)%"></span></div>
+        <div class="gl-muted gl-small">@Data.Voted of @Data.Eligible eligible voters have voted</div>
+    </div>
+    <div class="gl-glass gl-card">
+        <div class="gl-muted">Status</div>
+        <div class="gl-stat" style="font-size:26px">
+            @if (Data.Status == ElectionStatus.Live)
+            {
+                <span class="gl-live-dot"></span>@("Live")
+            }
+            else if (Data.Status == ElectionStatus.Closed)
+            {
+                @("Final results")
+            }
+            else
+            {
+                @("Not started")
+            }
+        </div>
+        <div class="gl-muted gl-small">
+            @(Data.Status == ElectionStatus.Live ? "Updates automatically as votes come in" : $"Voting ends {AppTime.Format(Data.Election.EndTime)}")
+        </div>
+    </div>
+</div>
+
+@if (!Data.CountsVisible)
+{
+    <div class="gl-glass gl-card" style="margin-top:16px">
+        <p class="gl-muted" style="margin:0">@Data.HiddenMessage</p>
+    </div>
+}
+else
+{
+    @foreach (var r in Data.Positions)
+    {
+        var grad = Gradient(r);
+        <div class="gl-glass gl-card" style="margin-top:16px">
+            <div class="gl-row">
+                <h3 style="margin:0">@r.Title</h3>
+                <span class="gl-muted gl-small">@(r.Seats == 1 ? "1 winner" : $"Top {r.Seats} win") · @r.Total votes counted</span>
+            </div>
+
+            @if (r.Total == 0)
+            {
+                <p class="gl-muted">No votes yet.</p>
+            }
+            else
+            {
+                <div class="gl-result">
+                    <div class="gl-donut" style="background:conic-gradient(@grad)">
+                        <div><span><b>@r.Total</b>votes</span></div>
+                    </div>
+
+                    <div class="gl-rows">
+                        @foreach (var c in r.Candidates)
+                        {
+                            <div class="gl-res-row">
+                                <div class="gl-res-top">
+                                    <span>
+                                        <span class="gl-dot" style="background:@ColorOf(r, c.Id)"></span>@c.Name
+                                        @if (c.IsWinner)
+                                        {
+                                            <span class="gl-pill">@(Data.Status == ElectionStatus.Closed ? "Winner" : "Leading")</span>
+                                        }
+                                        else if (c.IsTied)
+                                        {
+                                            <span class="gl-pill gl-pill-scheduled">Tied</span>
+                                        }
+                                    </span>
+                                    <span><strong>@c.Votes</strong> <span class="gl-muted">· @c.Percent.ToString("0.#")%</span></span>
+                                </div>
+                                <div class="gl-bar"><span style="width:@F(c.Percent)%;background:@ColorOf(r, c.Id)"></span></div>
+                            </div>
+                        }
+
+                        @if (r.AllowAbstain || r.Abstain > 0)
+                        {
+                            <div class="gl-res-row">
+                                <div class="gl-res-top">
+                                    <span><span class="gl-dot" style="background:#9aa0b8"></span>Abstained</span>
+                                    <span><strong>@r.Abstain</strong> <span class="gl-muted">· @(r.Total == 0 ? "0" : (r.Abstain * 100.0 / r.Total).ToString("0.#"))%</span></span>
+                                </div>
+                                <div class="gl-bar"><span style="width:@F(r.Total == 0 ? 0 : r.Abstain * 100.0 / r.Total)%;background:#9aa0b8"></span></div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            }
+
+            @if (r.TiedSeats > 0)
+            {
+                <div class="gl-alert">@TieNote(r)</div>
+
+                @if (AdminMode && Data.Status == ElectionStatus.Closed && r.TieHandling == TieHandling.AdminDecides)
+                {
+                    @if (r.TieSettled)
+                    {
+                        <button class="gl-btn gl-btn-sm" @onclick="() => ClearTieAsync(r)">Undo my decision</button>
+                    }
+                    else
+                    {
+                        <p class="gl-muted">Choose @r.TiedSeats of the tied candidates to win:</p>
+                        <div class="gl-checks">
+                            @foreach (var c in r.Candidates.Where(x => r.TiedIds.Contains(x.Id)))
+                            {
+                                <label class="gl-check-inline gl-chip">
+                                    <input type="checkbox" checked="@IsPicked(r.PositionId, c.Id)"
+                                           @onchange="args => TogglePick(r.PositionId, c.Id, (bool)args.Value!)" />
+                                    @c.Name
+                                </label>
+                            }
+                        </div>
+                        <button class="gl-btn gl-btn-primary gl-btn-sm" style="margin-top:10px"
+                                disabled="@(PickCount(r.PositionId) != r.TiedSeats)"
+                                @onclick="() => SaveTieAsync(r)">
+                            Save my decision
+                        </button>
+                    }
+                }
+            }
+        </div>
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public ElectionResults Data { get; set; } = default!;
+    [Parameter] public bool AdminMode { get; set; }
+    [Parameter] public EventCallback<(int PositionId, List<int> Winners)> OnTieDecision { get; set; }
+
+    private readonly Dictionary<int, HashSet<int>> picks = new();
+
+    private static readonly string[] Palette =
+        { "#7c9cff", "#c77dff", "#4ee3c1", "#ff9ecb", "#ffb86b", "#6ee7f9", "#a3e635", "#f87171" };
+
+    private double TurnoutPercent =>
+        Data.Eligible == 0 ? 0 : Math.Min(100.0, Data.Voted * 100.0 / Data.Eligible);
+
+    private static string F(double d) => d.ToString("0.##", CultureInfo.InvariantCulture);
+
+    // Each candidate keeps the same colour, whatever their rank
+    private static string ColorOf(PositionResult r, int candidateId)
+    {
+        var ids = r.Candidates.Select(c => c.Id).OrderBy(x => x).ToList();
+        return Palette[Math.Max(0, ids.IndexOf(candidateId)) % Palette.Length];
+    }
+
+    private static string Gradient(PositionResult r)
+    {
+        if (r.Total == 0) return "rgba(150,150,180,.35) 0 100%";
+
+        var parts = new List<string>();
+        double start = 0;
+        foreach (var c in r.Candidates.Where(c => c.Votes > 0))
+        {
+            var end = start + c.Votes * 100.0 / r.Total;
+            parts.Add($"{ColorOf(r, c.Id)} {F(start)}% {F(end)}%");
+            start = end;
+        }
+        if (r.Abstain > 0) parts.Add($"#9aa0b8 {F(start)}% 100%");
+        return string.Join(", ", parts);
+    }
+
+    private string TieNote(PositionResult r)
+    {
+        var names = string.Join(" and ", r.Candidates.Where(c => r.TiedIds.Contains(c.Id)).Select(c => c.Name));
+        if (r.TieSettled) return $"Tie between {names}, settled by the admin.";
+        if (Data.Status != ElectionStatus.Closed) return $"Currently tied: {names}.";
+
+        return r.TieHandling switch
+        {
+            TieHandling.AdminDecides => $"Tie between {names}. The admin will decide the result.",
+            TieHandling.RunOff => $"Tie between {names}. A run-off election is needed.",
+            _ => $"Tie between {names}. The result is declared a tie."
+        };
+    }
+
+    private bool IsPicked(int positionId, int candidateId) =>
+        picks.TryGetValue(positionId, out var set) && set.Contains(candidateId);
+
+    private int PickCount(int positionId) => picks.TryGetValue(positionId, out var set) ? set.Count : 0;
+
+    private void TogglePick(int positionId, int candidateId, bool on)
+    {
+        if (!picks.TryGetValue(positionId, out var set))
+        {
+            set = new HashSet<int>();
+            picks[positionId] = set;
+        }
+        if (on) set.Add(candidateId); else set.Remove(candidateId);
+    }
+
+    private async Task SaveTieAsync(PositionResult r)
+    {
+        var chosen = picks.TryGetValue(r.PositionId, out var set) ? set.ToList() : new List<int>();
+        await OnTieDecision.InvokeAsync((r.PositionId, chosen));
+        picks.Remove(r.PositionId);
+    }
+
+    private async Task ClearTieAsync(PositionResult r) =>
+        await OnTieDecision.InvokeAsync((r.PositionId, new List<int>()));
+}

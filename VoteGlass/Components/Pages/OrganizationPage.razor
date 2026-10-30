@@ -1,0 +1,140 @@
+﻿@page "/organisations"
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using VoteGlass.Models
+@using VoteGlass.Services
+@attribute [Authorize]
+@inject OrganizationService Orgs
+@inject AuthenticationStateProvider AuthProvider
+@inject NavigationManager Navigation
+
+<PageTitle>Organisations</PageTitle>
+
+<div class="gl-glass gl-card" style="margin-top:16px">
+    <h2 style="margin:0">Your organisations</h2>
+    <p class="gl-muted">An organisation is your own private space for running elections for your own people, with its own voter roster, groups and elections. Open one to work in it. Share its join link so your people can join with their registration numbers.</p>
+
+    @if (error is not null)
+    {
+        <div class="gl-alert gl-alert-error">@error</div>
+    }
+
+    @if (items is null)
+    {
+        <div class="gl-skeleton" style="height:80px"></div>
+    }
+    else if (items.Count == 0)
+    {
+        <p class="gl-muted">You don't run any organisation yet. Create one below.</p>
+    }
+    else
+    {
+        <div class="gl-table-wrap">
+            <table class="gl-table">
+                <tr><th>Name</th><th>Your role</th><th></th></tr>
+                @foreach (var o in items)
+                {
+                    <tr>
+                        <td>
+                            @o.Name
+                            @if (o.IsCurrent)
+                            {
+                                <span class="gl-pill">Current</span>
+                            }
+                            @if (o.IsSuspended)
+                            {
+                                <span class="gl-pill gl-pill-live">Suspended</span>
+                            }
+                        </td>
+                        <td>@o.Role</td>
+                        <td class="gl-actions-cell">
+                            @if (!o.IsSuspended)
+                            {
+                                <button class="gl-btn gl-btn-sm gl-btn-primary" @onclick="() => OpenAsync(o.Id)">Open</button>
+
+                                @if (o.JoinCode is not null)
+                                {
+                                    <button type="button" class="gl-btn gl-btn-sm" data-code="@JoinLink(o)" onclick="voteGlassCopy(this)">Copy join link</button>
+                                }
+
+                                @if (o.Role == OrgRole.Owner)
+                                {
+                                    @if (confirmResetId == o.Id)
+                                    {
+                                        <button class="gl-btn gl-btn-sm" @onclick="() => ResetAsync(o.Id)">Yes, replace it</button>
+                                        <button class="gl-btn gl-btn-sm" @onclick="() => confirmResetId = null">Cancel</button>
+                                    }
+                                    else
+                                    {
+                                        <button class="gl-btn gl-btn-sm" @onclick="() => confirmResetId = o.Id">New join link</button>
+                                    }
+                                }
+                            }
+                        </td>
+                    </tr>
+                }
+            </table>
+        </div>
+
+        @if (confirmResetId is not null)
+        {
+            <div class="gl-alert">A new join link stops every old link from working, including those already emailed in invitations.</div>
+        }
+    }
+</div>
+
+<div class="gl-glass gl-card" style="margin-top:16px">
+    <h3 style="margin:0 0 8px">Create an organisation</h3>
+    <p class="gl-muted">You'll be its owner. For example: "Greenfield Secondary School" or "Lagos Tech Club".</p>
+    <div class="gl-filters">
+        <input class="gl-input" placeholder="Organisation name" maxlength="150" @bind="newName" @bind:event="oninput" />
+        <button class="gl-btn gl-btn-primary" disabled="@busy" @onclick="CreateAsync">Create</button>
+    </div>
+</div>
+
+@code {
+    private List<OrgListItem>? items;
+    private string newName = "";
+    private string? error;
+    private string userId = "";
+    private bool busy;
+    private int? confirmResetId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "";
+        items = await Orgs.GetMineAsync(userId);
+    }
+
+    private string JoinLink(OrgListItem o) => $"{Navigation.BaseUri}join/{o.JoinCode}";
+
+    private async Task OpenAsync(int id)
+    {
+        error = await Orgs.SwitchAsync(userId, id);
+        if (error is null) Navigation.NavigateTo("admin", forceLoad: true);
+    }
+
+    private async Task ResetAsync(int id)
+    {
+        error = await Orgs.ResetJoinCodeAsync(userId, id);
+        confirmResetId = null;
+        items = await Orgs.GetMineAsync(userId);
+    }
+
+    private async Task CreateAsync()
+    {
+        busy = true;
+        error = null;
+
+        var (id, err) = await Orgs.CreateAsync(userId, newName);
+        if (id is null)
+        {
+            error = err;
+            busy = false;
+            return;
+        }
+
+        Navigation.NavigateTo("admin", forceLoad: true);
+    }
+}

@@ -1,0 +1,287 @@
+﻿@page "/voter/elections/{Id:int}/vote"
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authorization
+@using VoteGlass.Models
+@using VoteGlass.Services
+@attribute [Authorize(Roles = "Voter")]
+@inject VotingService Voting
+@inject AuthenticationStateProvider AuthProvider
+
+<PageTitle>Vote</PageTitle>
+
+@if (loading)
+{
+    <div class="gl-skeleton" style="height:200px;margin-top:16px"></div>
+}
+else if (ballot is null)
+{
+    <div class="gl-glass gl-card" style="margin-top:16px">
+        <div class="gl-alert gl-alert-error">Election not found.</div>
+        <a class="gl-btn" href="voter">Back to my elections</a>
+    </div>
+}
+else
+{
+    <div class="gl-glass gl-card" style="margin-top:16px">
+        <div class="gl-row">
+            <div>
+                <h2 style="margin:0"><span class="gl-swatch" style="background:@ballot.Election.AccentColor"></span> @ballot.Election.Title</h2>
+                @if (!string.IsNullOrWhiteSpace(ballot.Election.Description))
+                {
+                    <div class="gl-muted">@ballot.Election.Description</div>
+                }
+            </div>
+            @if (!done)
+            {
+                <a class="gl-btn gl-btn-sm" href="voter">Back</a>
+            }
+        </div>
+    </div>
+
+    @if (done)
+    {
+        <div class="gl-glass gl-card gl-done" style="margin-top:16px">
+            <div class="gl-tick">✓</div>
+            <h2>Your vote has been recorded</h2>
+            <p class="gl-muted">Thank you for voting. Your choices are private and can't be changed.</p>
+            <a class="gl-btn gl-btn-primary" href="voter">Back to my elections</a>
+        </div>
+    }
+    else if (ballot.AlreadyVoted)
+    {
+        <div class="gl-glass gl-card gl-done" style="margin-top:16px">
+            <div class="gl-tick">✓</div>
+            <h2>You've already voted</h2>
+            <p class="gl-muted">Your vote in this election has been recorded and can't be changed.</p>
+            <a class="gl-btn gl-btn-primary" href="voter">Back to my elections</a>
+        </div>
+    }
+    else if (ballot.Problem is not null)
+{
+    <div class="gl-glass gl-card" style="margin-top:16px">
+        <div class="gl-alert gl-alert-error">@ballot.Problem</div>
+        <a class="gl-btn" href="voter">Back to my elections</a>
+        @if (ballot.NeedsJoin)
+        {
+            <a class="gl-btn gl-btn-primary" href="@JoinUrl(ballot.Election)">Join this organisation</a>
+        }
+        else
+        {
+            <a class="gl-btn gl-btn-primary" href="voter/profile">My profile</a>
+        }
+    </div>
+}
+    else if (ballot.Problem is not null)
+    {
+    <div class="gl-glass gl-card" style="margin-top:16px">
+        <div class="gl-alert gl-alert-error">@ballot.Problem</div>
+        <a class="gl-btn" href="voter">Back to my elections</a>
+        <a class="gl-btn gl-btn-primary" href="voter/profile">My profile</a>
+    </div>
+   }
+    else if (step < ballot.Positions.Count)
+    {
+        var p = ballot.Positions[step];
+        var choice = ChoiceFor(p);
+
+        <div class="gl-glass gl-card" style="margin-top:16px">
+            <div class="gl-muted gl-small">Position @(step + 1) of @ballot.Positions.Count</div>
+            <div class="gl-bar"><span style="width:@((step + 1) * 100 / ballot.Positions.Count)%"></span></div>
+
+            <h2 style="margin-top:0">@p.Title</h2>
+            @if (!string.IsNullOrWhiteSpace(p.Description))
+            {
+                <p class="gl-muted">@p.Description</p>
+            }
+            <p class="gl-muted">
+                @(p.MaxSelections == 1
+                    ? "Choose one candidate."
+                    : $"Choose up to {p.MaxSelections} candidates ({choice.Ids.Count} selected).")
+            </p>
+
+            @foreach (var c in p.Candidates)
+            {
+                var selected = choice.Ids.Contains(c.Id);
+                <div class="gl-glass gl-choice @(selected ? "sel" : "")" @onclick="() => PickCandidate(p, c.Id)">
+                    <div class="gl-avatar">@Initials(c.FullName)</div>
+                    <div>
+                        <strong>@c.FullName</strong>
+                        @if (!string.IsNullOrWhiteSpace(c.Manifesto))
+                        {
+                            <div class="gl-muted gl-small">@c.Manifesto</div>
+                        }
+                    </div>
+                    <div class="gl-radio @(p.MaxSelections > 1 ? "square" : "")"></div>
+                </div>
+            }
+
+            @if (p.AllowAbstain)
+            {
+                <div class="gl-glass gl-choice @(choice.Abstain ? "sel" : "")" @onclick="() => PickAbstain(p)">
+                    <div class="gl-avatar gl-avatar-plain">–</div>
+                    <div>
+                        <strong>Abstain</strong>
+                        <div class="gl-muted gl-small">I don't want to choose a candidate for this position.</div>
+                    </div>
+                    <div class="gl-radio"></div>
+                </div>
+            }
+
+            <div class="gl-nav-row">
+                @if (step > 0)
+                {
+                    <button class="gl-btn" @onclick="() => step--">Back</button>
+                }
+                else
+                {
+                    <span></span>
+                }
+                <button class="gl-btn gl-btn-primary" disabled="@(!IsAnswered(p))" @onclick="() => step++">
+                    @(step == ballot.Positions.Count - 1 ? "Review my ballot" : "Next position")
+                </button>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="gl-glass gl-card" style="margin-top:16px">
+            <h2 style="margin-top:0">Review your ballot</h2>
+            <p class="gl-muted">Check your choices. Once you confirm, your vote is final and can't be changed.</p>
+
+            @for (var i = 0; i < ballot.Positions.Count; i++)
+            {
+                var index = i;
+                var position = ballot.Positions[i];
+                <div class="gl-cand-row">
+                    <div>
+                        <strong>@position.Title</strong>
+                        <div class="gl-muted">@Summary(position)</div>
+                    </div>
+                    <button class="gl-btn gl-btn-sm" @onclick="() => step = index">Change</button>
+                </div>
+            }
+
+            @if (error is not null)
+            {
+                <div class="gl-alert gl-alert-error">@error</div>
+            }
+
+            <div class="gl-nav-row">
+                <button class="gl-btn" @onclick="() => step = ballot.Positions.Count - 1">Back</button>
+                <button class="gl-btn gl-btn-primary" disabled="@submitting" @onclick="CastAsync">
+                    @(submitting ? "Casting your vote..." : "Confirm and cast my vote")
+                </button>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private class Choice
+    {
+        public bool Abstain;
+        public List<int> Ids = new();
+    }
+
+    private BallotView? ballot;
+    private readonly Dictionary<int, Choice> choices = new();
+    private bool loading = true;
+    private bool done;
+    private bool submitting;
+    private int step;
+    private string? error;
+    private string userId = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var state = await AuthProvider.GetAuthenticationStateAsync();
+        userId = state.User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "";
+        ballot = await Voting.GetBallotAsync(userId, Id);
+        loading = false;
+    }
+
+    private Choice ChoiceFor(Position p)
+    {
+        if (!choices.TryGetValue(p.Id, out var c))
+        {
+            c = new Choice();
+            choices[p.Id] = c;
+        }
+        return c;
+    }
+
+    private bool IsAnswered(Position p)
+    {
+        var c = ChoiceFor(p);
+        return c.Abstain || c.Ids.Count > 0;
+    }
+
+    private void PickCandidate(Position p, int candidateId)
+    {
+        var c = ChoiceFor(p);
+        c.Abstain = false;
+
+        if (p.MaxSelections == 1)
+        {
+            c.Ids = new List<int> { candidateId };
+            return;
+        }
+
+        // Tick or untick, up to the limit
+        if (!c.Ids.Remove(candidateId) && c.Ids.Count < p.MaxSelections)
+            c.Ids.Add(candidateId);
+    }
+
+    private void PickAbstain(Position p)
+    {
+        var c = ChoiceFor(p);
+        c.Abstain = true;
+        c.Ids.Clear();
+    }
+
+    private string Summary(Position p)
+    {
+        var c = ChoiceFor(p);
+        if (c.Abstain) return "Abstain";
+        return string.Join(", ", p.Candidates.Where(x => c.Ids.Contains(x.Id)).Select(x => x.FullName));
+    }
+
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length == 0 ? "?" : string.Concat(parts.Take(2).Select(w => char.ToUpper(w[0])));
+    }
+
+    private async Task CastAsync()
+    {
+        submitting = true;
+        error = null;
+
+        var payload = ballot!.Positions.ToDictionary(
+            p => p.Id,
+            p =>
+            {
+                var c = ChoiceFor(p);
+                return new PositionChoice(c.Abstain, c.Ids.ToList());
+            });
+
+        var result = await Voting.CastVoteAsync(userId, Id, payload);
+        if (result.Success)
+        {
+            done = true;
+            choices.Clear();      // nothing about the choices is kept on the page
+        }
+        else
+        {
+            error = result.Error;
+        }
+        submitting = false;
+    }
+   private static string JoinUrl(Election e)
+{
+    var back = Uri.EscapeDataString($"/voter/elections/{e.Id}/vote");
+    return $"join/{e.Organization?.JoinCode}?returnUrl={back}";
+}
+}
